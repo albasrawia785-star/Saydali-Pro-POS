@@ -44,21 +44,19 @@ jobs:
 
       - name: Install Capacitor CLI & Core
         run: |
-          # تثبيت الحزم اللازمة للبناء بشكل صريح لتفادي خطأ الاختفاء
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Initialize Capacitor Android
         run: |
-          # إنشاء مجلد الأندرويد وربطه بملفات الـ dist المبنّية
           npx cap init "Saydali Pro POS" "com.saydalipro.pos" --web-dir=dist
           npx cap add android
           npx cap sync android
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21 (Updated to match target release)
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17'
+          java-version: '21' # تم التحديث إلى 21 لحل المشكلة
 
       - name: Build Android APK
         run: |
