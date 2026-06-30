@@ -1,0 +1,52 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v3
+
+      - name: Unzip Project Files
+        run: |
+          unzip pos.zip--صيدلي-برو.zip -d . || unzip "pos.zip--صيدلي-برو" -d . || true
+          # نقل الملفات في حال كانت داخل مجلد فرعي بعد فك الضغط
+          if [ -d "src" ]; then echo "Files in root"; else cp -r */* . 2>/dev/null || true; fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Dependencies
+        run: npm install --force
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Initialize Capacitor Android
+        run: |
+          npx cap sync android || npx cap add android
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Build Android APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: Saydali-Pro-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
