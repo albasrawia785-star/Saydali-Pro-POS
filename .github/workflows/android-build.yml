@@ -21,7 +21,7 @@ jobs:
             echo "Found project files in: $TARGET_DIR"
             cp -r $TARGET_DIR/* .
           else
-            echo "Error: package.json not found in the zip file!"
+            echo "Error: package.json not found!"
             exit 1
           fi
           rm -rf temp_unzip
@@ -33,7 +33,61 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22' # التحديث إلى إصدار 22 لحل خطأ الـ CLI الأخير
+          node-version: '22'
+
+      - name: Install Dependencies
+        run: |
+          npm install --force
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Install Capacitor CLI & Core
+        run: |
+          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest
+
+      - name: Initialize Capacitor Android
+        run: |
+          npx cap init "Saydali Pro POS" "com.saydalipro.pos" --web-dir=dist
+          npx cap add android
+          npx cap sync android
+
+      - name: Inject Camera Permissions into AndroidManifest
+        run: |
+          # تحديد مسار ملف إصدار صلاحيات الأندرويد
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          
+          if [ -f "$MANIFEST_PATH" ]; then
+            echo "Injecting Camera permissions..."
+            # إضافة صلاحية استخدام الكاميرا وميزات الفلاش والتركيز التلقائي داخل الملف
+            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />' $MANIFEST_PATH
+          fi
+
+      - name: Update Kotlin & Gradle Versions for Java 21
+        run: |
+          cd android
+          if [ -f "build.gradle" ]; then
+            sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' build.gradle
+            sed -i 's/kotlin_version = .*/kotlin_version = "1.9.24"/g' build.gradle
+          fi
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Build Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon -Dorg.gradle.project.android.useAndroidX=true
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Saydali-Pro-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Install Dependencies
         run: |
