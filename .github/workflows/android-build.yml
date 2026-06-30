@@ -15,9 +15,19 @@ jobs:
 
       - name: Unzip Project Files
         run: |
-          unzip pos.zip--صيدلي-برو.zip -d . || unzip "pos.zip--صيدلي-برو" -d . || true
-          # نقل الملفات في حال كانت داخل مجلد فرعي بعد فك الضغط
-          if [ -d "src" ]; then echo "Files in root"; else cp -r */* . 2>/dev/null || true; fi
+          # فك ضغط الملف مع التعامل مع الاسم باللغة العربية
+          unzip "pos.zip--صيدلي-برو" -d temp_unzip || unzip *.zip -d temp_unzip || true
+          
+          # البحث عن المجلد الذي يحتوي على package.json ونقل محتوياته للمجلد الرئيسي
+          TARGET_DIR=$(find temp_unzip -name "package.json" -exec dirname {} \;)
+          if [ -n "$TARGET_DIR" ]; then
+            echo "Found project files in: $TARGET_DIR"
+            cp -r $TARGET_DIR/* .
+          else
+            echo "Error: package.json not found in the zip file!"
+            exit 1
+          fi
+          rm -rf temp_unzip
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
