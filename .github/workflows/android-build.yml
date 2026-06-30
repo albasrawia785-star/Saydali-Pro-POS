@@ -15,7 +15,7 @@ jobs:
 
       - name: Unzip Project Files
         run: |
-          # فك ضغط الملف مع التعامل مع الاسم باللغة العربية
+          # فك ضغط الملف
           unzip "pos.zip--صيدلي-برو" -d temp_unzip || unzip *.zip -d temp_unzip || true
           
           # البحث عن المجلد الذي يحتوي على package.json ونقل محتوياته للمجلد الرئيسي
@@ -29,13 +29,19 @@ jobs:
           fi
           rm -rf temp_unzip
 
+      - name: Clean Old Build Artifacts
+        run: |
+          # حذف المجلدات والملفات التي تسبب تعارض البيئات
+          rm -rf node_modules package-lock.json dist
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20' # تحديث الإصدار لتوافقه الأعلى مع حزم Tailwind الحديثة
 
       - name: Install Dependencies
-        run: npm install --force
+        run: |
+          npm install --force
 
       - name: Build Web Application
         run: npm run build
