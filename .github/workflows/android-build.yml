@@ -123,6 +123,7 @@ jobs:
 
       - name: Force Replace All Android Icons via Python Script
         run: |
+          python3 -m pip install pillow
           python3 -c "
           import os
           from PIL import Image
