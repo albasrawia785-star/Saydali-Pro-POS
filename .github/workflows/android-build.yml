@@ -48,67 +48,60 @@ jobs:
       - name: Build Web Application
         run: npm run build
 
-      - name: Inject Backup Share Interceptor
+      - name: Inject Custom Download Interceptor
         run: |
-          # إنشاء سكربت يحول عمليات التنزيل إلى مشاركة حقيقية عبر أندرويد
+          # حقن سكربت يقوم بالتنزيل المباشر أو فتح المشاركة بسلاسة
           cat << 'EOF' > dist/inject_share.js
           (function() {
-            let backupContent = null;
+            let lastFileUrl = null;
+            let lastFileName = 'backup.json';
 
-            // 1. التقاط محتوى ملف الـ JSON فور إنشائه برمجيًا
             const originalCreate = URL.createObjectURL;
             URL.createObjectURL = function(blob) {
-              if (blob) {
-                const reader = new FileReader();
-                reader.onload = function() {
-                  backupContent = reader.result;
-                };
-                reader.readAsText(blob);
-              }
-              return originalCreate.call(this, blob);
+              lastFileUrl = originalCreate.call(this, blob);
+              return lastFileUrl;
             };
 
-            // 2. الاعتراض عند الضغط على زر تنزيل النسخة الاحتياطية
             document.addEventListener('click', async (e) => {
               const target = e.target.closest('button, a, div');
               if (target && target.innerText && target.innerText.includes('تنزيل النسخة الاحتياطية')) {
-                
                 setTimeout(async () => {
-                  if (!backupContent) {
-                    alert('جاري تجهيز البيانات، يرجى المحاولة مرة أخرى.');
-                    return;
-                  }
+                  if (!lastFileUrl) return;
 
+                  const dateStr = new Date().toISOString().slice(0, 10);
+                  const fileName = `Daftar-Aldeyon-Backup-${dateStr}.json`;
+
+                  // محاولة المشاركة عبر ملف صريح
                   try {
-                    const dateStr = new Date().toISOString().slice(0, 10);
-                    const fileName = `backup-${dateStr}.json`;
-                    const file = new File([backupContent], fileName, { type: 'application/json' });
+                    const res = await fetch(lastFileUrl);
+                    const blob = await res.blob();
+                    const file = new File([blob], fileName, { type: 'application/json' });
 
-                    // 3. فتح قائمة مشاركة النظام (واتساب، تليجرام، الملفات)
-                    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
                       await navigator.share({
                         title: 'النسخة الاحتياطية',
-                        text: 'ملف النسخة الاحتياطية للديون',
+                        text: 'ملف النسخة الاحتياطية - دفتر الديون',
                         files: [file]
                       });
-                    } else if (navigator.share) {
-                      await navigator.share({
-                        title: 'النسخة الاحتياطية',
-                        text: backupContent
-                      });
-                    } else {
-                      alert('ميزة المشاركة غير مدعومة في هذا الجهاز.');
+                      return;
                     }
                   } catch (err) {
-                    console.log('إلغاء المشاركة:', err);
+                    console.log('Share error fallback to direct download:', err);
                   }
-                }, 400);
+
+                  // في حال تعذر المشاركة، يتم التنزيل المباشر فوراً كبديل
+                  const link = document.createElement('a');
+                  link.href = lastFileUrl;
+                  link.download = fileName;
+                  document.body.appendChild(link);
+                  link.click();
+                  link.remove();
+                }, 300);
               }
             }, true);
           })();
           EOF
 
-          # ربط السكربت بملف index.html المخصص للبناء
           if [ -f "dist/index.html" ]; then
             sed -i '/<\/head>/i \  <script src="./inject_share.js"><\/script>' dist/index.html
           fi
@@ -119,9 +112,9 @@ jobs:
 
       - name: Initialize Capacitor Android
         run: |
-          # -------------------------------------------------------------
-          # غيّر قيمة APP_NAME هنا مستقبلاً لأي اسم تريد ظهوره عند التثبيت
-          # -------------------------------------------------------------
+          # ------------------------------------------------------------------
+          # اسم التطبيق يظهر هنا بـ "دفتر الديون" ويمكنك تغيير قيمة APP_NAME مستقبلاً
+          # ------------------------------------------------------------------
           APP_NAME="دفتر الديون"
           PACKAGE_ID="com.daftar.aldeyon"
 
@@ -129,11 +122,11 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Inject Permissions into AndroidManifest
+      - name: Configure Android Permissions and Download Settings
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST_PATH" ]; then
-            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' $MANIFEST_PATH
+            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.INTERNET" />' $MANIFEST_PATH
           fi
 
       - name: Update Kotlin & Gradle Versions for Java 21
