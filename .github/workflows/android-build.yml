@@ -48,55 +48,74 @@ jobs:
       - name: Build Web Application
         run: npm run build
 
-      - name: Inject Custom Download Interceptor
+      - name: Install Capacitor Native Plugins
         run: |
-          # حقن سكربت يقوم بالتنزيل المباشر أو فتح المشاركة بسلاسة
+          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest @capacitor/filesystem@latest @capacitor/share@latest
+
+      - name: Inject Native Share & Download Script
+        run: |
+          # حقن سكربت يستخرج بيانات الملف ويستخدم إضافات الأندرويد الأصيلة لتنزيل الملف وفتح نافذة المشاركة
           cat << 'EOF' > dist/inject_share.js
           (function() {
-            let lastFileUrl = null;
-            let lastFileName = 'backup.json';
+            let pendingBase64 = null;
 
+            // 1. التقاط بيانات الـ JSON وتحويلها فوراً إلى Base64
             const originalCreate = URL.createObjectURL;
             URL.createObjectURL = function(blob) {
-              lastFileUrl = originalCreate.call(this, blob);
-              return lastFileUrl;
+              if (blob) {
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                  if (reader.result) {
+                    pendingBase64 = reader.result.split(',')[1];
+                  }
+                };
+                reader.readAsDataURL(blob);
+              }
+              return originalCreate.call(this, blob);
             };
 
+            // 2. الاعتراض عند الضغط على زر التنزيل
             document.addEventListener('click', async (e) => {
               const target = e.target.closest('button, a, div');
               if (target && target.innerText && target.innerText.includes('تنزيل النسخة الاحتياطية')) {
+                
                 setTimeout(async () => {
-                  if (!lastFileUrl) return;
+                  if (!pendingBase64) return;
 
                   const dateStr = new Date().toISOString().slice(0, 10);
                   const fileName = `Daftar-Aldeyon-Backup-${dateStr}.json`;
 
-                  // محاولة المشاركة عبر ملف صريح
                   try {
-                    const res = await fetch(lastFileUrl);
-                    const blob = await res.blob();
-                    const file = new File([blob], fileName, { type: 'application/json' });
+                    // استخدام إضافة Capacitor Filesystem و Share الرسمية
+                    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+                      const { Filesystem, Share } = window.Capacitor.Plugins;
 
-                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                      await navigator.share({
+                      // أ) حفظ الملف فعلياً في ذاكرة التخزين المؤقتة للجهاز (CACHE/DOWNLOADS)
+                      const savedFile = await Filesystem.writeFile({
+                        path: fileName,
+                        data: pendingBase64,
+                        directory: 'CACHE'
+                      });
+
+                      // ب) فتح نافذة المشاركة الأصيلة الخاصة بنظام أندرويد (تسمح بالإرسال عبر الواتساب أو حفظه في الجهاز)
+                      await Share.share({
                         title: 'النسخة الاحتياطية',
                         text: 'ملف النسخة الاحتياطية - دفتر الديون',
-                        files: [file]
+                        url: savedFile.uri,
+                        dialogTitle: 'مشاركة أو حفظ النسخة الاحتياطية'
                       });
-                      return;
+                    } else {
+                      // طريقة احتياطية في حال الفحص
+                      const blob = await fetch(`data:application/json;base64,${pendingBase64}`).then(r => r.blob());
+                      const file = new File([blob], fileName, { type: 'application/json' });
+                      if (navigator.share) {
+                        await navigator.share({ files: [file], title: 'النسخة الاحتياطية' });
+                      }
                     }
                   } catch (err) {
-                    console.log('Share error fallback to direct download:', err);
+                    console.log('إلغاء أو خطأ في المشاركة:', err);
                   }
-
-                  // في حال تعذر المشاركة، يتم التنزيل المباشر فوراً كبديل
-                  const link = document.createElement('a');
-                  link.href = lastFileUrl;
-                  link.download = fileName;
-                  document.body.appendChild(link);
-                  link.click();
-                  link.remove();
-                }, 300);
+                }, 400);
               }
             }, true);
           })();
@@ -106,15 +125,8 @@ jobs:
             sed -i '/<\/head>/i \  <script src="./inject_share.js"><\/script>' dist/index.html
           fi
 
-      - name: Install Capacitor CLI & Core
-        run: |
-          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest
-
       - name: Initialize Capacitor Android
         run: |
-          # ------------------------------------------------------------------
-          # اسم التطبيق يظهر هنا بـ "دفتر الديون" ويمكنك تغيير قيمة APP_NAME مستقبلاً
-          # ------------------------------------------------------------------
           APP_NAME="دفتر الديون"
           PACKAGE_ID="com.daftar.aldeyon"
 
@@ -122,7 +134,7 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Configure Android Permissions and Download Settings
+      - name: Inject Android Storage & Share Permissions
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST_PATH" ]; then
