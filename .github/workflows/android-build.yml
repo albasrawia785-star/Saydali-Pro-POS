@@ -83,14 +83,23 @@ jobs:
           distribution: 'zulu'
           java-version: '21'
 
-      - name: Build Android APK
+      - name: Build and Sign Release APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon -Dorg.gradle.project.android.useAndroidX=true
+          
+          # 1. إنشاء مفتاح توقيع مؤقت خاص بالمشروع
+          keytool -genkey -v -keystore release.keystore -alias saydali_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "SaydaliPass123" -keypass "SaydaliPass123" -dname "CN=SaydaliPro, OU=Dev, O=App, L=Basra, S=Basra, C=IQ"
 
-      - name: Upload APK
+          # 2. بناء ملف الـ Release غير الموقع
+          ./gradlew assembleRelease --no-daemon -Dorg.gradle.project.android.useAndroidX=true
+
+          # 3. توقيع الـ APK باستخدام apksigner من Android SDK
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
+          $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"SaydaliPass123" --key-pass pass:"SaydaliPass123" --out app/build/outputs/apk/release/Saydali-Pro-Signed.apk app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: Saydali-Pro-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Saydali-Pro-Signed-APK
+          path: android/app/build/outputs/apk/release/Saydali-Pro-Signed.apk
