@@ -41,63 +41,76 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Dependencies
+      - name: Install Dependencies & Capacitor Share
         run: |
           npm install --force
+          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest @capacitor/share@latest @capacitor/filesystem@latest
 
-      - name: Inject Web Share Interceptor Script
+      - name: Inject Native Share Script
         run: |
-          # حقن سكربت يعترض الضغط على زر تنزيل النسخة الاحتياطية ويظهر اللوحة المنبثقة مباشرة
+          # script لحفظ الملف في الذاكرة المؤقتة وفتح نافذة المشاركة الأصيلة للأندرويد
           cat << 'EOF' > inject_share.js
           (function() {
             document.addEventListener('DOMContentLoaded', () => {
-              // الاعتراض على مستوى إنشاء الروابط وملفات الـ Blob
-              const originalCreateObjectURL = URL.createObjectURL;
-              let currentBlobFile = null;
+              let currentBlobData = null;
 
+              const originalCreateObjectURL = URL.createObjectURL;
               URL.createObjectURL = function(blob) {
                 const url = originalCreateObjectURL.call(this, blob);
-                currentBlobFile = new File([blob], `backup-${new Date().toISOString().slice(0,10)}.json`, { type: "application/json" });
+                if (blob.type === 'application/json' || blob.type === 'application/octet-stream') {
+                  const reader = new FileReader();
+                  reader.onloadend = function() {
+                    currentBlobData = reader.result.split(',')[1]; // تحويل لـ Base64
+                  };
+                  reader.readAsDataURL(blob);
+                }
                 return url;
               };
 
-              // التقاط الضغط على أي زر يحمل نص تنزيل النسخة الاحتياطية
               document.addEventListener('click', (e) => {
                 const target = e.target.closest('button, a');
                 if (target && target.innerText.includes('تنزيل النسخة الاحتياطية')) {
                   setTimeout(() => {
-                    showShareModal();
-                  }, 300);
+                    triggerNativeShare();
+                  }, 500);
                 }
               }, true);
 
-              function showShareModal() {
-                if (document.getElementById('backup-share-modal')) return;
-                const modal = document.createElement('div');
-                modal.id = 'backup-share-modal';
-                modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:99999;direction:rtl;';
-                modal.innerHTML = `
-                  <div style="background:#fff;padding:24px;border-radius:16px;max-width:360px;width:85%;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.2);font-family:sans-serif;">
-                    <div style="width:48px;height:48px;background:#e7f5ff;color:#1c7ed6;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px auto;font-size:24px;">✓</div>
-                    <h3 style="margin:0 0 8px 0;color:#111;font-size:18px;">تم تجهيز النسخة الاحتياطية</h3>
-                    <p style="color:#666;font-size:14px;line-height:1.5;margin:0 0 20px 0;">يرجى اختيار المشاركة لحفظ الملف على الهاتف أو إرساله عبر التطبيقات.</p>
-                    <div style="display:flex;flex-direction:column;gap:10px;">
-                      <button id="btn-share-action" style="background:#0d6efd;color:#fff;border:none;padding:12px;border-radius:8px;font-weight:bold;cursor:pointer;font-size:15px;">مشاركة الملف</button>
-                      <button onclick="document.getElementById('backup-share-modal').remove()" style="background:#f8f9fa;color:#495057;border:1px solid #dee2e6;padding:10px;border-radius:8px;cursor:pointer;font-size:14px;">إغلاق</button>
-                    </div>
-                  </div>
-                `;
-                document.body.appendChild(modal);
+              async function triggerNativeShare() {
+                const fileName = `backup-${new Date().toISOString().slice(0,10)}.json`;
+                
+                try {
+                  // استخدام الإضافات الأصيلة المتاحة في Capacitor
+                  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Share) {
+                    const { Filesystem, Share } = window.Capacitor.Plugins;
+                    
+                    // 1. كتابة الملف مؤقتاً في ذاكرة التطبيق
+                    const fileResult = await Filesystem.writeFile({
+                      path: fileName,
+                      data: currentBlobData,
+                      directory: 'CACHE'
+                    });
 
-                document.getElementById('btn-share-action').onclick = async () => {
-                  if (currentBlobFile && navigator.canShare && navigator.canShare({ files: [currentBlobFile] })) {
-                    try {
-                      await navigator.share({ files: [currentBlobFile], title: 'النسخة الاحتياطية' });
-                    } catch (err) {}
+                    // 2. فتح نافذة المشاركة الأصيلة لنظام أندرويد (تتيح الواتساب، تليجرام، إلخ)
+                    await Share.share({
+                      title: 'النسخة الاحتياطية',
+                      text: 'ملف النسخة الاحتياطية للنظام',
+                      url: fileResult.uri,
+                      dialogTitle: 'مشاركة النسخة الاحتياطية عبر:'
+                    });
+                  } else if (navigator.share && currentBlobData) {
+                    const blob = await fetch(`data:application/json;base64,${currentBlobData}`).then(r => r.blob());
+                    const file = new File([blob], fileName, { type: "application/json" });
+                    await navigator.share({
+                      files: [file],
+                      title: 'النسخة الاحتياطية'
+                    });
                   } else {
-                    alert('المشاركة المباشرة غير مدعومة، تم حفظ الملف في ذاكرة التطبيق.');
+                    alert('لم يتم العثور على تطبيق للمشاركة.');
                   }
-                };
+                } catch (err) {
+                  console.log('تم إلغاء المشاركة أو حدث خطأ:', err);
+                }
               }
             });
           })();
@@ -116,25 +129,20 @@ jobs:
         run: |
           cp inject_share.js dist/ || true
 
-      - name: Install Capacitor CLI & Core
-        run: |
-          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest
-
       - name: Initialize Capacitor Android
         run: |
-          # يمكنك تغيير اسم التطبيق والمعرف من السطرين التاليين:
-          APP_NAME=" دفتر الديون"
+          APP_NAME="دفتر الديون"
           PACKAGE_ID="com.saydalipro.pos"
 
           npx cap init "$APP_NAME" "$PACKAGE_ID" --web-dir=dist
           npx cap add android
           npx cap sync android
 
-      - name: Inject Camera Permissions into AndroidManifest
+      - name: Inject Permissions into AndroidManifest
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST_PATH" ]; then
-            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />' $MANIFEST_PATH
+            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />' $MANIFEST_PATH
           fi
 
       - name: Update Kotlin & Gradle Versions for Java 21
