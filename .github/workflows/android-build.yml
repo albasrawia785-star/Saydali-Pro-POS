@@ -45,70 +45,73 @@ jobs:
         run: |
           npm install --force
 
-      - name: Inject Robust Native Web Share Script
-        run: |
-          # حقن سكربت صريح يمسك بيانات الـ Blob فور إنشائها ويفتح قائمة المشاركة للواتساب فوراً
-          cat << 'EOF' > inject_share.js
-          (function() {
-            let lastBlob = null;
+      - name: Build Web Application
+        run: npm run build
 
-            // 1. التقاط الـ Blob الخاص بالنسخة الاحتياطية عند توليدها
-            const originalCreateObjectURL = URL.createObjectURL;
+      - name: Inject Backup Share Interceptor
+        run: |
+          # إنشاء سكربت يحول عمليات التنزيل إلى مشاركة حقيقية عبر أندرويد
+          cat << 'EOF' > dist/inject_share.js
+          (function() {
+            let backupContent = null;
+
+            // 1. التقاط محتوى ملف الـ JSON فور إنشائه برمجيًا
+            const originalCreate = URL.createObjectURL;
             URL.createObjectURL = function(blob) {
-              lastBlob = blob;
-              return originalCreateObjectURL.call(this, blob);
+              if (blob) {
+                const reader = new FileReader();
+                reader.onload = function() {
+                  backupContent = reader.result;
+                };
+                reader.readAsText(blob);
+              }
+              return originalCreate.call(this, blob);
             };
 
-            // 2. الاستماع لأي ضغطة على زر النسخ الاحتياطي
+            // 2. الاعتراض عند الضغط على زر تنزيل النسخة الاحتياطية
             document.addEventListener('click', async (e) => {
-              const btn = e.target.closest('button, a');
-              if (btn && btn.innerText && btn.innerText.includes('تنزيل النسخة الاحتياطية')) {
-                // الانتظار قليلاً لضمان تشكيل ملف الـ Blob
+              const target = e.target.closest('button, a, div');
+              if (target && target.innerText && target.innerText.includes('تنزيل النسخة الاحتياطية')) {
+                
                 setTimeout(async () => {
-                  if (!lastBlob) return;
+                  if (!backupContent) {
+                    alert('جاري تجهيز البيانات، يرجى المحاولة مرة أخرى.');
+                    return;
+                  }
 
-                  const dateStr = new Date().toISOString().slice(0, 10);
-                  const fileName = `Saydali-Pro-Backup-${dateStr}.json`;
-                  const file = new File([lastBlob], fileName, { type: 'application/json' });
+                  try {
+                    const dateStr = new Date().toISOString().slice(0, 10);
+                    const fileName = `backup-${dateStr}.json`;
+                    const file = new File([backupContent], fileName, { type: 'application/json' });
 
-                  // 3. استدعاء المشاركة الخاصة بالنظام مباشرة (Native Web Share)
-                  if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-                    try {
+                    // 3. فتح قائمة مشاركة النظام (واتساب، تليجرام، الملفات)
+                    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
                       await navigator.share({
                         title: 'النسخة الاحتياطية',
-                        text: 'ملف النسخة الاحتياطية لتطبيق صيدلي برو',
+                        text: 'ملف النسخة الاحتياطية للديون',
                         files: [file]
                       });
-                    } catch (err) {
-                      console.log('تم إلغاء المشاركة بواسطة المستخدم');
+                    } else if (navigator.share) {
+                      await navigator.share({
+                        title: 'النسخة الاحتياطية',
+                        text: backupContent
+                      });
+                    } else {
+                      alert('ميزة المشاركة غير مدعومة في هذا الجهاز.');
                     }
-                  } else {
-                    // في حال عدم توفر مشاركة الملفات، تحويل الملف إلى رابط تنزيل مباشر
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(lastBlob);
-                    a.download = fileName;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
+                  } catch (err) {
+                    console.log('إلغاء المشاركة:', err);
                   }
-                }, 300);
+                }, 400);
               }
             }, true);
           })();
           EOF
 
-          if [ -f "index.html" ]; then
-            sed -i '/<\/head>/i \  <script src="./inject_share.js"><\/script>' index.html
-          elif [ -f "public/index.html" ]; then
-            sed -i '/<\/head>/i \  <script src="./inject_share.js"><\/script>' public/index.html
+          # ربط السكربت بملف index.html المخصص للبناء
+          if [ -f "dist/index.html" ]; then
+            sed -i '/<\/head>/i \  <script src="./inject_share.js"><\/script>' dist/index.html
           fi
-
-      - name: Build Web Application
-        run: npm run build
-
-      - name: Copy Injected Script to Dist
-        run: |
-          cp inject_share.js dist/ || true
 
       - name: Install Capacitor CLI & Core
         run: |
@@ -116,21 +119,18 @@ jobs:
 
       - name: Initialize Capacitor Android
         run: |
+          # -------------------------------------------------------------
+          # غيّر قيمة APP_NAME هنا مستقبلاً لأي اسم تريد ظهوره عند التثبيت
+          # -------------------------------------------------------------
           APP_NAME="دفتر الديون"
-          PACKAGE_ID="com.saydalipro.pos"
+          PACKAGE_ID="com.daftar.aldeyon"
 
           npx cap init "$APP_NAME" "$PACKAGE_ID" --web-dir=dist
           npx cap add android
           npx cap sync android
 
-      - name: Inject Android Web Chrome Client for File Sharing
+      - name: Inject Permissions into AndroidManifest
         run: |
-          # تفعيل دعم مشاركة الملفات وحفظها داخل الـ WebView في أندرويد
-          ACTIVITY_PATH="android/app/src/main/java/com/saydalipro/pos/MainActivity.java"
-          if [ ! -f "$ACTIVITY_PATH" ]; then
-            ACTIVITY_PATH=$(find android/app/src/main/java -name "MainActivity.java" || find android/app/src/main/java -name "MainActivity.kt")
-          fi
-          
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST_PATH" ]; then
             sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' $MANIFEST_PATH
@@ -155,15 +155,15 @@ jobs:
           cd android
           chmod +x gradlew
           
-          keytool -genkey -v -keystore release.keystore -alias saydali_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "SaydaliPass123" -keypass "SaydaliPass123" -dname "CN=SaydaliPro, OU=Dev, O=App, L=Basra, S=Basra, C=IQ"
+          keytool -genkey -v -keystore release.keystore -alias saydali_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "SaydaliPass123" -keypass "SaydaliPass123" -dname "CN=DaftarAldeyon, OU=Dev, O=App, L=Basra, S=Basra, C=IQ"
 
           ./gradlew assembleRelease --no-daemon -Dorg.gradle.project.android.useAndroidX=true
 
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
-          $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"SaydaliPass123" --key-pass pass:"SaydaliPass123" --out app/build/outputs/apk/release/Saydali-Pro-Signed.apk app/build/outputs/apk/release/app-release-unsigned.apk
+          $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"SaydaliPass123" --key-pass pass:"SaydaliPass123" --out app/build/outputs/apk/release/Daftar-Aldeyon-Signed.apk app/build/outputs/apk/release/app-release-unsigned.apk
 
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: Saydali-Pro-Signed-APK
-          path: android/app/build/outputs/apk/release/Saydali-Pro-Signed.apk
+          name: Daftar-Aldeyon-APK
+          path: android/app/build/outputs/apk/release/Daftar-Aldeyon-Signed.apk
